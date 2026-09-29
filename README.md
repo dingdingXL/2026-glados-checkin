@@ -12,8 +12,8 @@
 
 | 优势                  | 说明                                                |
 | --------------------- | --------------------------------------------------- |
-| ✅ **2026年验证可用** | 经过实测，确认在2026年4月20日正常工作               |
-| ✅ **绝对可用**       | 修复了其他脚本失效的问题（token更新为glados.cloud） |
+| ✅ **2026年验证可用** | 经过实测，确认在2026年9月29日正常工作               |
+| ✅ **绝对可用**       | 修复了其他脚本失效的问题（token 自动跟随域名 www.glados.vip） |
 | ✅ **新手友好**       | 全程图解，不会也能照着做                            |
 | ✅ **作者持续维护**   | 遇到问题提Issue，作者很乐意帮忙                     |
 
@@ -70,15 +70,15 @@
 
 ## 🔥 为什么你需要这个？
 
-> > **⚠️ 重要：如果你使用其他签到脚本失败，显示 "please checkin via [https://glados.cloud](https://glados.cloud)"，请使用本项目！**
+> > **⚠️ 重要：如果你使用其他签到脚本失败，显示 "please checkin via [https://glados.cloud](https://glados.cloud)" 或 "please checkin via [https://www.glados.vip](https://www.glados.vip)"，请使用本项目！**
 
-GLaDOS 在 2026 年初进行了 API 更新，**绝大多数旧签到脚本已失效**。我们通过抓包分析发现了问题：
+GLaDOS 在 2026 年进行了两次 API 更新，**绝大多数旧签到脚本已失效**。我们通过抓包分析发现了问题：
 
-| 问题       | 旧脚本                  | 本项目（已修复）           |
-| ---------- | ----------------------- | -------------------------- |
-| 签到 Token | `glados.one` ❌         | `glados.cloud` ✅          |
-| 域名支持   | rocks/network ❌        | cloud ✅                   |
-| 签到结果   | "please checkin via..." | "Checkin!" 或 "Repeats" ✅ |
+| 问题       | 旧脚本                           | 本项目（已修复）                   |
+| ---------- | -------------------------------- | ---------------------------------- |
+| 签到 Token | `glados.one` / `glados.cloud` ❌ | 自动跟随实际域名（`www.glados.vip`）✅ |
+| 域名支持   | rocks / network / cloud ❌       | www.glados.vip ✅                  |
+| 签到结果   | "please checkin via..."          | "Today's observation logged..." ✅ |
 
 <details>
 <summary><b>🔬 技术细节：我们是怎样修复问题的（感兴趣的看）</b></summary>
@@ -111,13 +111,18 @@ GLaDOS 在 2026 年初进行了 API 更新，**绝大多数旧签到脚本已失
 
 ```python
 # 失败 ❌
-{'token': 'glados.one'}  → "please checkin via https://glados.cloud"
+{'token': 'glados.one'}    → "please checkin via https://glados.cloud"
 
-# 成功 ✅
-{'token': 'glados.cloud'} → "Checkin Repeats! Please Try Tomorrow"
+# 成功 ✅（2026-01 起）
+{'token': 'glados.cloud'}  → "Checkin Repeats! Please Try Tomorrow"
+
+# 成功 ✅（2026-09 起，官网迁至 www.glados.vip）
+{'token': 'www.glados.vip'} → "Today's observation logged. Return tomorrow for more points."
 ```
 
-**问题根源**：GLaDOS 更新了 API，签到 token 必须从 `glados.one` 改为 `glados.cloud`！
+**问题根源**：GLaDOS 会核对签到 token 与请求域名是否一致。API 更新后 token 必须从 `glados.one` → `glados.cloud` → **`www.glados.vip`** 跟随迁移，否则一律返回 "please checkin via ..."。
+
+**因此本项目不再写死 token**，而是由 `token_of()` 从实际命中的域名动态生成，避免下次官网迁移时再次失效。
 
 </details>
 
@@ -125,7 +130,7 @@ GLaDOS 在 2026 年初进行了 API 更新，**绝大多数旧签到脚本已失
 
 > **📢 重要提示**
 >
-> - GLaDOS 官网已迁移至 **glados.cloud**（不再是 glados.rocks）
+> - GLaDOS 官网已迁移至 **www.glados.vip**（不再是 glados.cloud / glados.rocks）
 > - 本项目专为 2026 积分制度优化，每天自动签到两次
 > - 完全免费，使用 GitHub Actions，无需自己的服务器
 > - 不会的话可以提 Issue，作者很乐意帮助技术新手！
@@ -141,7 +146,8 @@ GLaDOS 在 2026 年初进行了 API 更新，**绝大多数旧签到脚本已失
 | ⏰ **每日两次** | 早上 9:30 + 晚上 21:30 自动签到 |
 | 🔄 **失败重试** | 首次失败自动重试一次            |
 | 📱 **微信推送** | PushPlus 漂亮 HTML 报告         |
-| ☁️ **2026 API** | 适配最新 glados.cloud API       |
+| ☁️ **2026 API** | 适配最新 www.glados.vip API     |
+| 🔁 **域名自愈** | token 跟随实际域名，官网迁移不再失效 |
 | 🔧 **持续维护** | 发现问题及时修复                |
 
 ---
@@ -230,7 +236,7 @@ GLaDOS 在 2026 年初进行了 API 更新，**绝大多数旧签到脚本已失
 
 ### 第二步：获取 Cookie 🍪
 
-> ⚠️ **注意**：GLaDOS 官网已迁移到 **[https://glados.cloud](https://glados.cloud)**，请使用新域名！
+> ⚠️ **注意**：GLaDOS 官网已迁移到 **[https://www.glados.vip](https://www.glados.vip)**，请使用新域名！
 
 #### 2.1 安装 Cookie 扩展
 
@@ -244,12 +250,18 @@ GLaDOS 在 2026 年初进行了 API 更新，**绝大多数旧签到脚本已失
 
 #### 2.2 登录 GLaDOS 并获取 Cookie
 
-1. 打开 [https://glados.cloud](https://glados.cloud) 并登录
+1. 打开 [https://www.glados.vip](https://www.glados.vip) 并登录
 2. 进入 **签到页面**（Console → Checkin）
 3. 点击浏览器右上角的 **Cookie-Editor** 扩展图标
-4. 找到并复制这两个值：
+4. 复制完整的 Cookie（共 4 个字段）：
    - `koa:sess` → 一串很长的字符串
    - `koa:sess.sig` → 一串较短的字符串
+   - `gld:sess` → 新版接口也需要的会话标识
+   - `gld:sess.sig` → 对应的签名
+
+> 💡 最简单的方式：在 Cookie-Editor 里点 **Export → Header String**，
+> 直接复制出 `koa:sess=...; koa:sess.sig=...; gld:sess=...; gld:sess.sig=...` 整串，
+> 粘到 `GLADOS_COOKIE` 里即可，脚本会自动识别。
 
 ![获取 Cookie](images/glados-cookies.png)
 
@@ -548,14 +560,16 @@ python3 checkin.py
 ```text
 👤 your@email.com
 
-当前积分: 46 (+20)
-剩余天数: 353 天
-签到结果: Bindweed! Bindweed!
+当前积分: 38 (+5)
+今日获得: +5 积分
+剩余天数: 356 天
+连续签到: 2 天
+签到结果: Today's observation logged. Return tomorrow for more points.
 
 🎁 兑换选项:
-❌ 100分→10天 (差54分)
-❌ 200分→30天 (差154分)
-❌ 500分→100天 (差454分)
+❌ 100分→10天 (差62分)
+❌ 200分→30天 (差162分)
+❌ 500分→100天 (差462分)
 ```
 
 ---
@@ -638,11 +652,28 @@ GitHub API 要求必须指定分支名。
 </details>
 
 <details>
-<summary><b>Q: 显示 "please checkin via https://glados.cloud" 怎么办？</b></summary>
+<summary><b>Q: 显示 "please checkin via https://..." 怎么办？</b></summary>
 
-这表示你使用的签到脚本已过期！GLaDOS 在 2026 年更新了 API，旧脚本的 token 值 `glados.one` 已失效。
+这表示签到 token 与请求域名不一致，脚本已过期。
 
-**解决方案**：使用本项目，我们已经修复了这个问题（token 改为 `glados.cloud`）。
+**解决方案**：使用本项目。我们已修复两次 API 变更（`glados.one` → `glados.cloud` → `www.glados.vip`），
+并且不再写死 token —— 脚本会用实际命中的域名动态生成 token，官网再迁移也不会失效。
+
+</details>
+
+<details>
+<summary><b>Q: 新版成功提示是什么？"Today's observation logged" 是成功吗？</b></summary>
+
+是**成功**！GLaDOS 在 2026 年 9 月更换了文案：
+
+| 返回文案                                                     | 含义         |
+| ------------------------------------------------------------ | ------------ |
+| `Today's observation logged. Return tomorrow for more points.` | 签到成功 ✅  |
+| `Checkin Repeats! Please Try Tomorrow`                        | 今日已签 ✅  |
+| `please checkin via https://...`                              | 失败 ❌      |
+
+注意：签到接口成功时 `code=1`，而 `/api/user/status` 成功时 `code=0`，
+各接口 `code` 语义不一致，因此脚本只依据文案判断成败。
 
 </details>
 
@@ -750,6 +781,23 @@ cookie1&cookie2&cookie3
 
 ## 📝 更新日志
 
+### v1.2.0 (2026-09-29) 🔥 重大修复
+
+**问题**：签到返回 `Today's observation logged. Return tomorrow for more points.`（实为成功），但脚本判定为失败，推送显示"成功0/1"。
+
+**原因**：GLaDOS 官网迁移到 `www.glados.vip`，签到接口的 token 必须与**请求域名完全一致**（含 `www.` 前缀）。旧的写死值 `glados.cloud` 已不匹配。
+
+**修复**：
+
+1. 域名优先级改为 `www.glados.vip` 优先
+2. 新增 `token_of()`，签到 token 由实际命中的域名动态生成，官网再迁移也不会失效
+3. 修正成功判定：签到接口成功 `code=1`、状态接口成功 `code=0`，语义不一致，改为按文案判断
+4. 推送新增「今日获得积分」与「连续签到天数」
+5. User-Agent 更新为 Edge 149，补齐 `sec-ch-ua` / `sec-fetch-*` / `priority` 等浏览器请求头
+6. 域名与路径全部失败时打印最后错误，便于排查
+
+**实测**：`2026-09-29` 使用最新 Cookie 验证通过，返回 ✅。
+
 ### v1.1.0 (2026-01-25) 🔥 重大修复
 
 **问题**：签到始终返回 "please checkin via https://glados.cloud"，导致机器人无法签到。
@@ -786,7 +834,7 @@ MIT
 
 **Made with ❤️ for GLaDOS users in 2026**
 
-**🔧 本项目经过 2026-04-20 验证，确认可用！**
+**🔧 本项目经过 2026-09-29 验证，确认可用！**
 
 **⭐ Star 一下，支持作者持续更新！⭐**
 

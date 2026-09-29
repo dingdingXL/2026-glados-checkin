@@ -7,7 +7,8 @@
 - 全自动签到
 - 精准获取当前积分 (Points)
 - PushPlus 微信推送（包含积分、剩余天数、签到结果）
-- 智能多域名切换 (优先 glados.cloud)
+- 智能多域名切换 (优先 www.glados.vip)
+- 签到 token 自动跟随实际域名，避免跨域名无效签到
 - 支持 Cookie-Editor 导出格式
 """
 
@@ -24,18 +25,27 @@ if sys.platform.startswith('win'):
 
 # ================= 配置 =================
 
-# 域名优先级：Cloud 第一
+# 域名优先级：www.glados.vip 第一（2026 新版 API）
 DOMAINS = [
+    "https://www.glados.vip",
     "https://glados.vip",
     "https://glados.cloud",
-    "https://glados.rocks", 
+    "https://glados.rocks",
     "https://glados.network",
 ]
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0',
     'Content-Type': 'application/json;charset=UTF-8',
     'Accept': 'application/json, text/plain, */*',
+    'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+    'sec-ch-ua': '"Microsoft Edge";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-site': 'same-origin',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-dest': 'empty',
+    'priority': 'u=1, i',
 }
 
 # ================= 工具函数 =================
@@ -56,7 +66,7 @@ def extract_cookie(raw: str):
     # JSON
     if raw.startswith('{'):
         try:
-            return 'koa.sess=' + json.loads(raw).get('token')
+            return 'koa:sess=' + json.loads(raw).get('token')
         except: pass
         
     # JWT Token
@@ -84,13 +94,21 @@ class GLaDOS:
         self.domain = DOMAINS[0]
         self.email = "?"
         self.left_days = "?"
+        self.system_date = ""
         self.points = "?"
         self.points_change = "?"
         self.exchange_info = ""
         self.plan = "?"
+        self.today_gain = None
+        self.streak = None
         
-    def req(self, method, path, data=None):
-        """带自动域名切换的请求"""
+    def req(self, method, path, data=None, data_fn=None):
+        """带自动域名切换的请求
+
+        data_fn: 可调用对象，接收当前域名并返回请求体。
+                 用于那些 body 内容必须与域名保持一致的接口（如签到 token）。
+        """
+        last_err = None
         for d in DOMAINS:
             try:
                 url = f"{d}{path}"
@@ -98,18 +116,25 @@ class GLaDOS:
                 h['Cookie'] = self.cookie
                 h['Origin'] = d
                 h['Referer'] = f"{d}/console/checkin"
-                
+
+                payload = data_fn(d) if data_fn else data
+
                 if method == 'GET':
                     resp = requests.get(url, headers=h, timeout=10)
                 else:
-                    resp = requests.post(url, headers=h, json=data, timeout=10)
-                
+                    resp = requests.post(url, headers=h, json=payload, timeout=10)
+
                 if resp.status_code == 200:
-                    self.domain = d # Remember working domain
+                    self.domain = d  # Remember working domain
                     return resp.json()
+                else:
+                    last_err = f"HTTP {resp.status_code}"
             except Exception as e:
+                last_err = e
                 log(f"⚠️ {d} 请求失败: {e}")
                 continue
+        if last_err:
+            log(f"⚠️ {path} 所有域名均失败，最后错误: {last_err}")
         return None
 
     def get_status(self):
@@ -119,6 +144,7 @@ class GLaDOS:
             d = res['data']
             self.email = d.get('email', 'Unknown')
             self.left_days = str(d.get('leftDays', '?')).split('.')[0]
+            self.system_date = str(d.get('system_date') or '')[:10]
             return True
         return False
 
@@ -130,32 +156,76 @@ class GLaDOS:
             self.points = str(res.get('points', '0')).split('.')[0]
             
             # 最近一次积分变化
-            history = res.get('history', [])
+            history = res.get('history', []) or []
             if history:
                 last = history[0]
                 change = str(last.get('change', '0')).split('.')[0]
                 if not change.startswith('-'):
                     change = '+' + change
                 self.points_change = change
+
+                # 若最近一条流水就是今天，则视为今日签到收益
+                today = self.system_date or datetime.now().strftime('%Y-%m-%d')
+                if str(last.get('detail', ''))[:10] == today:
+                    try:
+                        self.today_gain = int(float(last.get('change', 0)))
+                    except (TypeError, ValueError):
+                        self.today_gain = None
             
             # 兑换计划
-            plans = res.get('plans', {})
-            pts = int(self.points)
+            plans = res.get('plans', {}) or {}
+            try:
+                pts = int(self.points)
+            except (TypeError, ValueError):
+                pts = 0
             exchange_lines = []
             for plan_id, plan_data in plans.items():
-                need = plan_data['points']
-                days = plan_data['days']
+                need = plan_data.get('points', 0)
+                days = plan_data.get('days', 0)
                 if pts >= need:
                     exchange_lines.append(f"✅ {need}分→{days}天 (可兑换)")
                 else:
-                    exchange_lines.append(f"❌ {need}分→{days}天 (差{need-pts}分)")
+                    exchange_lines.append(f"❌ {need}分→{days}天 (差{need - pts}分)")
             self.exchange_info = "<br>".join(exchange_lines)
             return True
         return False
 
+    @staticmethod
+    def token_of(domain):
+        """签到 token 必须与请求域名完全一致（含 www. 前缀）"""
+        return domain.replace('https://', '').replace('http://', '').strip('/')
+
     def checkin(self):
-        """执行签到"""
-        return self.req('POST', '/api/user/checkin', {'token': 'glados.cloud'})
+        """执行签到：token 跟随实际命中的域名，避免跨域名导致无效签到"""
+        res = self.req(
+            'POST',
+            '/api/user/checkin',
+            data_fn=lambda d: {'token': self.token_of(d)},
+        )
+        if res:
+            # 新版 API 会返回连续签到天数（points 字段恒为 0，不代表今日收益）
+            self.streak = res.get('streak')
+        return res
+
+    # 失败文案特征：新版 API 失败时返回 "please checkin via https://..."
+    FAIL_HINTS = ('please checkin', 'unauthorized', 'invalid', 'expired', 'error', 'fail')
+
+    @classmethod
+    def is_success(cls, res):
+        """判断签到结果
+
+        注意：GLaDOS 各接口的 code 语义并不统一（签到成功 code=1，状态接口成功 code=0），
+        所以这里只依据 message 文案判断，不能依赖 code：
+        - 成功: "Today's observation logged. Return tomorrow for more points."
+        - 成功: "Checkin Repeats! Please Try Tomorrow"（今日已签）
+        - 失败: "please checkin via https://..."
+        """
+        if not res:
+            return False
+        msg = f"{res.get('message', '')}{res.get('msg', '')}".strip().lower()
+        if not msg:
+            return False
+        return not any(hint in msg for hint in cls.FAIL_HINTS)
 
 # ================= 主程序 =================
 
@@ -234,17 +304,30 @@ def main():
         g.get_points()
         
         # 3. Log
-        status_icon = "✅" if "Checkin" in msg else "⚠️"
-        log(f"用户: {g.email} | 积分: {g.points} | 天数: {g.left_days} | 结果: {msg}")
-        
-        if "Checkin" in msg: success_cnt += 1
-        
+        ok = g.is_success(res)
+        status_icon = "✅" if ok else "⚠️"
+        gain_txt = f" | 今日+{g.today_gain}" if g.today_gain is not None else ""
+        log(f"{status_icon} 用户: {g.email} | 积分: {g.points} | 天数: {g.left_days}{gain_txt} | 结果: {msg}")
+
+        if ok: success_cnt += 1
+
+        # 连续签到天数
+        streak_html = ""
+        if g.streak:
+            streak_html = f'<p style="margin:8px 0; color:#000; font-size:16px;"><b>连续签到:</b> <span style="font-weight:bold;">{g.streak} 天</span></p>'
+        # 今日获得积分
+        gain_html = ""
+        if g.today_gain is not None and g.today_gain > 0:
+            gain_html = f'<p style="margin:8px 0; color:#000; font-size:16px;"><b>今日获得:</b> <span style="color:#e74c3c; font-weight:bold;">+{g.today_gain} 积分</span></p>'
+
         # 4. Result Formatting
         results.append(f"""
 <div style="border:2px solid #333; padding:15px; margin-bottom:15px; border-radius:10px; background:#fff;">
     <h3 style="margin:0 0 15px 0; color:#333; border-bottom:2px solid #333; padding-bottom:8px;">👤 {g.email}</h3>
     <p style="margin:8px 0; color:#000; font-size:16px;"><b>当前积分:</b> <span style="color:#e74c3c; font-size:22px; font-weight:bold;">{g.points}</span> <span style="color:#27ae60; font-weight:bold;">({g.points_change})</span></p>
+    {gain_html}
     <p style="margin:8px 0; color:#000; font-size:16px;"><b>剩余天数:</b> <span style="font-weight:bold;">{g.left_days} 天</span></p>
+    {streak_html}
     <p style="margin:8px 0; color:#000; font-size:16px;"><b>签到结果:</b> {msg}</p>
     <div style="margin-top:15px; padding:12px; background:#f0f0f0; border-radius:8px; border:1px solid #ccc;">
         <p style="margin:0 0 8px 0; color:#333; font-weight:bold; font-size:15px;">🎁 兑换选项:</p>
