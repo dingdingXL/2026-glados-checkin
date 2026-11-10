@@ -45,3 +45,13 @@ GLaDOS 自动签到脚本（`checkin.py`），支持 GitHub Actions / cron-job.o
 ## 环境备注
 - 本机 Git Bash 缺 coreutils（`mkdir`/`head`/`dirname` 都不可用），需要 shell 工具时改用 PowerShell 工具或内置 Read/Write/Glob。
 - 测试用 Python：`C:\Users\admin\.workbuddy\binaries\python\envs\default\Scripts\python.exe`（已装 requests）。
+- **git push 到 GitHub 需绕开沙箱代理**：沙箱自带的 `127.0.0.1:13935` 连不通 GitHub（502/SSL EOF）。
+  本机 Clash 在 `127.0.0.1:7897`，可用。必须**同时**覆盖大小写代理变量，否则小写的
+  `https_proxy` 会盖掉大写设置：
+  ```bash
+  HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=http://127.0.0.1:7897 \
+  https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897 \
+  git push origin main
+  ```
+  沙箱内即使设了 7897 也会被强制走 13935，必须用 `dangerouslyDisableSandbox`。
+- `checkin.yml` 配了 `push: branches: [main]` 触发器，**每次推送都会自动跑一次签到**。
