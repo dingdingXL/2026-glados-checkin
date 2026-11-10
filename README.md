@@ -12,7 +12,7 @@
 
 | 优势                  | 说明                                                |
 | --------------------- | --------------------------------------------------- |
-| ✅ **2026年验证可用** | 经过实测，确认在2026年9月29日正常工作               |
+| ✅ **2026年验证可用** | 经过实测，确认在2026年11月10日正常工作               |
 | ✅ **绝对可用**       | 修复了其他脚本失效的问题（token 自动跟随域名 www.glados.vip） |
 | ✅ **新手友好**       | 全程图解，不会也能照着做                            |
 | ✅ **作者持续维护**   | 遇到问题提Issue，作者很乐意帮忙                     |
@@ -147,6 +147,7 @@ GLaDOS 在 2026 年进行了两次 API 更新，**绝大多数旧签到脚本已
 | 🔄 **失败重试** | 首次失败自动重试一次            |
 | 📱 **微信推送** | PushPlus 漂亮 HTML 报告         |
 | ☁️ **2026 API** | 适配最新 www.glados.vip API     |
+| 🛡️ **人机校验** | 自动完成 Bot Challenge（nonce + proof） |
 | 🔁 **域名自愈** | token 跟随实际域名，官网迁移不再失效 |
 | 🔧 **持续维护** | 发现问题及时修复                |
 
@@ -244,7 +245,7 @@ GLaDOS 在 2026 年进行了两次 API 更新，**绝大多数旧签到脚本已
 
 ![Cookie-Editor 扩展](images/cookie-extension.png)
 
-> 💡 **提示**：以下任意一个扩展都可以使用，只要能显示 `koa:sess` 和 `koa:sess.sig` 这两个 Cookie 就行！
+> 💡 **提示**：以下任意一个扩展都可以使用，只要能显示 `gld:sess`（新版）或 `koa:sess`（旧版）这类会话 Cookie 就行！
 
 ![可选的 Cookie 扩展](images/cookie-alternative.png)
 
@@ -253,30 +254,32 @@ GLaDOS 在 2026 年进行了两次 API 更新，**绝大多数旧签到脚本已
 1. 打开 [https://www.glados.vip](https://www.glados.vip) 并登录
 2. 进入 **签到页面**（Console → Checkin）
 3. 点击浏览器右上角的 **Cookie-Editor** 扩展图标
-4. 复制完整的 Cookie（共 4 个字段）：
-   - `koa:sess` → 一串很长的字符串
-   - `koa:sess.sig` → 一串较短的字符串
-   - `gld:sess` → 新版接口也需要的会话标识
-   - `gld:sess.sig` → 对应的签名
+4. 复制 Cookie。2026-11 起站点改用了新的会话字段：
+   - **新版（推荐）**：`gld:sess` + `gld:sess.sig` ← 这两个就够用了
+   - **旧版（仍兼容）**：`koa:sess` + `koa:sess.sig`
 
-> 💡 最简单的方式：在 Cookie-Editor 里点 **Export → Header String**，
-> 直接复制出 `koa:sess=...; koa:sess.sig=...; gld:sess=...; gld:sess.sig=...` 整串，
-> 粘到 `GLADOS_COOKIE` 里即可，脚本会自动识别。
+> 💡 最省事的方式：在 Cookie-Editor 里点 **Export → Header String**，
+> 把整串 `gld:sess=...; gld:sess.sig=...`（或含 `koa:sess` 的完整串）直接粘到 `GLADOS_COOKIE`，
+> 脚本会自动识别，不需要手工拼接。
 
 ![获取 Cookie](images/glados-cookies.png)
 
 #### 2.3 组合 Cookie（重要！）
 
-将两个值按以下格式组合，**注意格式必须完全正确**：
+官网两种会话字段任选其一即可，**注意分号后要有一个空格**：
 
 ```text
+# 新版（推荐）
+gld:sess=gld_xxxxxxxx; gld:sess.sig=xxxxxxxx
+
+# 旧版（仍兼容）
 koa:sess=你的长字符串; koa:sess.sig=你的短字符串
 ```
 
 **正确示例**：
 
 ```text
-koa:sess=eyJ1c2VySWQiOjEyMzQ1Njc4OTB9; koa:sess.sig=abcdef123456
+gld:sess=gld_0123456789abcdef0123456789abcdef01234567; gld:sess.sig=Ab3dEf6hIj9lMn0pQr2sTu4vWx6yZa8B
 ```
 
 **常见错误**：
@@ -678,6 +681,26 @@ GitHub API 要求必须指定分支名。
 </details>
 
 <details>
+<summary><b>Q: 提示 device-mismatch 或 "automated check-in detected" 是什么？</b></summary>
+
+这是 GLaDOS 的人机校验拦截，说明请求没有完成 **Bot Challenge**：
+
+```text
+GET  /api/user/checkin/challenge   → 拿到 nonce（有效期 5 分钟）
+等待 2.6 秒
+proof = sha256(nonce + ".glados-observe-v1")
+POST /api/user/checkin  { token, nonce, proof }
+```
+
+本项目 v1.3.0 起已自动完成上述流程，正常情况下不会出现该提示。若仍出现：
+
+1. 确认用的是最新版 `checkin.py`（日志里应显示"挑战应答"）
+2. 用浏览器打开官网手动签到一次，确认账号本身没有被临时限制
+3. Cookie 失效也会间接导致校验失败，重新登录并更新 `GLADOS_COOKIE`
+
+</details>
+
+<details>
 <summary><b>Q: 显示 "Checkin Repeats! Please Try Tomorrow" 是什么意思？</b></summary>
 
 这表示**今天已经成功签到过了**！这是正常的成功响应，说明签到功能正常工作。
@@ -781,6 +804,29 @@ cookie1&cookie2&cookie3
 
 ## 📝 更新日志
 
+### v1.3.0 (2026-11-10) 🛡️ 支持人机校验
+
+**背景**：GLaDOS 给签到接口加了 Bot Challenge，只带 `token` 的请求会被风控拦下
+（`device-mismatch` 或 `automated check-in detected`，`code = 4`）。
+
+**新增**：
+
+1. 先 `GET /api/user/checkin/challenge` 领取一次性 `nonce`（有效期 5 分钟）
+2. 等待 2.6 秒（站点前端同样会等 ~2.5 秒，服务端校验这个时间差）
+3. 计算 `proof = sha256(nonce + ".glados-observe-v1")`
+4. `POST /api/user/checkin` 提交 `{token, nonce, proof}`
+
+**兜底**：
+
+- 挑战接口拿不到 `nonce` 时，自动回退到纯 token 方式，兼容老接口
+- `reason = device-mismatch` / `code = -2`（没有权限）/ 自动签到检测 均识别为失败
+- 每个域名独立走完整的「领挑战 → 提交」链路，避免 nonce 与域名错配
+- 成功后记住可用域名，后续请求优先复用，减少超时重试
+- 请求超时调整为「连接 6s / 读取 20s」，适应签到接口偶发慢响应
+- 推送标注「今日已签」，不会把重复签到误报成失败
+
+**实测**：`2026-11-10` 使用 `gld:sess` 新版 Cookie 验证通过，返回 ✅。
+
 ### v1.2.0 (2026-09-29) 🔥 重大修复
 
 **问题**：签到返回 `Today's observation logged. Return tomorrow for more points.`（实为成功），但脚本判定为失败，推送显示"成功0/1"。
@@ -834,7 +880,7 @@ MIT
 
 **Made with ❤️ for GLaDOS users in 2026**
 
-**🔧 本项目经过 2026-09-29 验证，确认可用！**
+**🔧 本项目经过 2026-11-10 验证，确认可用！**
 
 **⭐ Star 一下，支持作者持续更新！⭐**
 

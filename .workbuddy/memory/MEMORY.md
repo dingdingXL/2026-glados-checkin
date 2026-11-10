@@ -22,13 +22,25 @@ GLaDOS 自动签到脚本（`checkin.py`），支持 GitHub Actions / cron-job.o
    `streak` 字段是连续签到天数，可信。
 5. `points` / `leftDays` 是**字符串**且带超长小数（如 `"38.0000000000000000"`），
    统一用 `str(x).split('.')[0]` 截断。
+6. **2026-11 起服务端上线 Bot Challenge**（`GET /api/user/checkin/challenge`，
+   返回 `{code:0, nonce, ttl:300000}`，ttl 5 分钟）。
+   前端流程：领 nonce → 等约 2.6s → `proof = sha256(f"{nonce}.glados-observe-v1")`
+   → `POST /api/user/checkin` body `{token, nonce, proof}`。
+   注意：实测**纯 token 仍能返回 `code:1`**（但日常响应带 `"repeated":true`），
+   所以服务端对挑战的强制程度尚未确认；`checkin.py` 采用「先挑战、拿不到 nonce 再回退纯 token」。
+7. **新版 Cookie 只需 `gld:sess` + `gld:sess.sig`**（2026-11 起），
+   老版 `koa:sess` / `koa:sess.sig` 仍兼容。`extract_cookie` 原样透传整串即可。
 
 ## 接口速查
 | 接口 | 方法 | 关键字段 |
 | --- | --- | --- |
-| `/api/user/checkin` | POST | body `{"token": "<域名>"}`；返回 `message` / `streak` |
+| `/api/user/checkin/challenge` | GET | 返回 `nonce`（一次性，需在限定时间内提交 proof） |
+| `/api/user/checkin` | POST | body `{"token","nonce","proof"}`；返回 `message` / `streak` / `reason` |
 | `/api/user/status` | GET | `data.email` / `data.leftDays` / `data.system_date` |
 | `/api/user/points` | GET | `points` / `history[]` / `plans`（plan100/200/500）/ `streak` |
+
+## 多域名
+`www.glados.vip`、`glados.one` 等均直连 Cloudflare 后端，无跳转，可互为回退。
 
 ## 环境备注
 - 本机 Git Bash 缺 coreutils（`mkdir`/`head`/`dirname` 都不可用），需要 shell 工具时改用 PowerShell 工具或内置 Read/Write/Glob。

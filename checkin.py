@@ -4,7 +4,7 @@
 2026 GLaDOS 自动签到 (积分增强版)
 
 功能：
-- 全自动签到
+- 全自动签到（自动完成 Bot Challenge 的 nonce + proof 校验）
 - 精准获取当前积分 (Points)
 - PushPlus 微信推送（包含积分、剩余天数、签到结果）
 - 智能多域名切换 (优先 www.glados.vip)
@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import time
+import hashlib
 from datetime import datetime
 
 # Fix Windows Unicode Output
@@ -24,6 +25,17 @@ if sys.platform.startswith('win'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 # ================= 配置 =================
+
+# 签到相关接口
+CHECKIN_PATH = '/api/user/checkin'
+CHALLENGE_PATH = '/api/user/checkin/challenge'
+
+# Bot Challenge：领取 nonce 后需等待一段时间，再提交 sha256(nonce + 盐) 作为 proof
+CHALLENGE_SALT = 'glados-observe-v1'
+CHALLENGE_WAIT = 2.6
+
+# (连接超时, 读取超时)：签到接口偶发慢响应，读取给宽一点
+TIMEOUT = (6, 20)
 
 # 域名优先级：www.glados.vip 第一（2026 新版 API）
 DOMAINS = [
@@ -101,15 +113,18 @@ class GLaDOS:
         self.plan = "?"
         self.today_gain = None
         self.streak = None
+        self.mode = "plain"      # challenge / plain
+        self.repeated = False    # 今日是否已签过
         
-    def req(self, method, path, data=None, data_fn=None):
+    def req(self, method, path, data=None, domains=None):
         """带自动域名切换的请求
 
-        data_fn: 可调用对象，接收当前域名并返回请求体。
-                 用于那些 body 内容必须与域名保持一致的接口（如签到 token）。
+        domains: 限定要尝试的域名列表，默认使用全局 DOMAINS。
         """
         last_err = None
-        for d in DOMAINS:
+        # 优先复用上一次成功的域名，避免每次请求都从超时域名重试
+        pool = domains or ([self.domain] + [x for x in DOMAINS if x != self.domain])
+        for d in pool:
             try:
                 url = f"{d}{path}"
                 h = HEADERS.copy()
@@ -117,12 +132,12 @@ class GLaDOS:
                 h['Origin'] = d
                 h['Referer'] = f"{d}/console/checkin"
 
-                payload = data_fn(d) if data_fn else data
+                payload = data
 
                 if method == 'GET':
-                    resp = requests.get(url, headers=h, timeout=10)
+                    resp = requests.get(url, headers=h, timeout=TIMEOUT)
                 else:
-                    resp = requests.post(url, headers=h, json=payload, timeout=10)
+                    resp = requests.post(url, headers=h, json=payload, timeout=TIMEOUT)
 
                 if resp.status_code == 200:
                     self.domain = d  # Remember working domain
@@ -195,32 +210,76 @@ class GLaDOS:
         """签到 token 必须与请求域名完全一致（含 www. 前缀）"""
         return domain.replace('https://', '').replace('http://', '').strip('/')
 
+    def solve_challenge(self, domain):
+        """领取 Bot Challenge 并计算 proof
+
+        返回值：
+        - dict  : 拿到 nonce，已算好 proof
+        - None  : 接口可用但没有 nonce（老版本接口），调用方回退纯 token
+        - False : 域名不可达，直接跳过
+        """
+        res = self.req('GET', CHALLENGE_PATH, domains=[domain])
+        if res is None:
+            return False
+        nonce = res.get('nonce')
+        if not nonce:
+            log(f"ℹ️ {domain} 未返回 nonce，回退为纯 token 签到")
+            return None
+        # 站点前端同样会等待约 2.5 秒再提交，服务器会校验这个时间差
+        time.sleep(CHALLENGE_WAIT)
+        proof = hashlib.sha256(f"{nonce}.{CHALLENGE_SALT}".encode()).hexdigest()
+        return {'nonce': nonce, 'proof': proof}
+
     def checkin(self):
-        """执行签到：token 跟随实际命中的域名，避免跨域名导致无效签到"""
-        res = self.req(
-            'POST',
-            '/api/user/checkin',
-            data_fn=lambda d: {'token': self.token_of(d)},
-        )
-        if res:
-            # 新版 API 会返回连续签到天数（points 字段恒为 0，不代表今日收益）
-            self.streak = res.get('streak')
-        return res
+        """执行签到
+
+        优先走 Bot Challenge（nonce + proof）以通过人机校验；
+        若挑战接口不可用，则自动回退到只带 token 的老方式。
+        每个域名单独完成「领挑战 → 提交」的完整链路，避免 nonce 与域名错配。
+        """
+        for d in DOMAINS:
+            challenge = self.solve_challenge(d)
+            if challenge is False:
+                continue  # 域名不可达，换下一个
+
+            body = {'token': self.token_of(d)}
+            if challenge:
+                body.update(challenge)
+                self.mode = 'challenge'
+            else:
+                self.mode = 'plain'
+
+            res = self.req('POST', CHECKIN_PATH, data=body, domains=[d])
+            if res:
+                self.domain = d
+                self.repeated = bool(res.get('repeated'))
+                # points 字段恒为 0，不代表今日收益；streak 为连续签到天数
+                self.streak = res.get('streak')
+                return res
+            log(f"⚠️ {d} 签到无有效响应，尝试下一个域名")
+        return None
 
     # 失败文案特征：新版 API 失败时返回 "please checkin via https://..."
-    FAIL_HINTS = ('please checkin', 'unauthorized', 'invalid', 'expired', 'error', 'fail')
+    FAIL_HINTS = (
+        'please checkin', 'unauthorized', 'invalid', 'expired', 'error', 'fail',
+        '没有权限', 'device-mismatch', 'automated check-in detected',
+    )
 
     @classmethod
     def is_success(cls, res):
         """判断签到结果
 
         注意：GLaDOS 各接口的 code 语义并不统一（签到成功 code=1，状态接口成功 code=0），
-        所以这里只依据 message 文案判断，不能依赖 code：
+        所以这里只依据 message / reason 判断，不能依赖 code：
         - 成功: "Today's observation logged. Return tomorrow for more points."
         - 成功: "Checkin Repeats! Please Try Tomorrow"（今日已签）
         - 失败: "please checkin via https://..."
+        - 失败: reason = "device-mismatch" / code = 4 自动签到被拦
         """
         if not res:
+            return False
+        reason = str(res.get('reason') or '').strip()
+        if reason and reason.lower() != 'ok':
             return False
         msg = f"{res.get('message', '')}{res.get('msg', '')}".strip().lower()
         if not msg:
@@ -307,9 +366,14 @@ def main():
         ok = g.is_success(res)
         status_icon = "✅" if ok else "⚠️"
         gain_txt = f" | 今日+{g.today_gain}" if g.today_gain is not None else ""
-        log(f"{status_icon} 用户: {g.email} | 积分: {g.points} | 天数: {g.left_days}{gain_txt} | 结果: {msg}")
+        mode_txt = "挑战应答" if g.mode == "challenge" else "纯 token"
+        repeat_txt = " | 今日已签" if g.repeated else ""
+        log(f"{status_icon} 用户: {g.email} | 积分: {g.points} | 天数: {g.left_days}{gain_txt} | {mode_txt}{repeat_txt} | 结果: {msg}")
 
         if ok: success_cnt += 1
+
+        # 今日已签时在推送里标注，避免误以为重复签到失败
+        repeat_html = ' <span style="color:#888;">（今日已签）</span>' if g.repeated else ""
 
         # 连续签到天数
         streak_html = ""
@@ -328,7 +392,7 @@ def main():
     {gain_html}
     <p style="margin:8px 0; color:#000; font-size:16px;"><b>剩余天数:</b> <span style="font-weight:bold;">{g.left_days} 天</span></p>
     {streak_html}
-    <p style="margin:8px 0; color:#000; font-size:16px;"><b>签到结果:</b> {msg}</p>
+    <p style="margin:8px 0; color:#000; font-size:16px;"><b>签到结果:</b> {msg}{repeat_html}</p>
     <div style="margin-top:15px; padding:12px; background:#f0f0f0; border-radius:8px; border:1px solid #ccc;">
         <p style="margin:0 0 8px 0; color:#333; font-weight:bold; font-size:15px;">🎁 兑换选项:</p>
         <p style="margin:0; color:#000; font-size:14px; line-height:1.8;">
